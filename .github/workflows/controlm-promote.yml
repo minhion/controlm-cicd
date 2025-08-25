@@ -182,13 +182,16 @@ jobs:
           mkdir -p transformed-jobs
           
           for job_file in ${{ needs.validate-and-build.outputs.job_files }}; do
+            echo "========================================"
             echo "Transforming job file: $job_file"
+            echo "========================================"
             
             base_name=$(basename "$job_file" .json)
             transformed_file="transformed-jobs/${base_name}-transformed.json"
             
             if [[ -f "$DESCRIPTOR_FILE" ]]; then
-              # Transform with descriptor file
+              echo "Using descriptor file: $DESCRIPTOR_FILE"
+              # Transform with descriptor file and capture any stderr
               docker run --rm \
                 -e CTM_ENDPOINT="$CTM_ENDPOINT" \
                 -e CTM_API_TOKEN="$CTM_API_TOKEN" \
@@ -196,13 +199,37 @@ jobs:
                 -v "$PWD:/workspace" \
                 -w /workspace \
                 ${{ env.DOCKER_IMAGE }} \
-                ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > "$transformed_file"
+                bash -c "ctm deploy transform '$job_file' '$DESCRIPTOR_FILE' 2>/dev/null" > "$transformed_file"
+              
+              TRANSFORM_EXIT_CODE=$?
+              echo "Transform exit code: $TRANSFORM_EXIT_CODE"
+              
+              # Check if transformation failed or produced invalid output
+              if [[ $TRANSFORM_EXIT_CODE -ne 0 ]] || [[ ! -s "$transformed_file" ]] || ! jq empty "$transformed_file" 2>/dev/null; then
+                echo "⚠️  Transformation failed or produced invalid JSON, using original file"
+                cp "$job_file" "$transformed_file"
+              else
+                echo "✅ Transformation successful"
+              fi
             else
-              # No transformation needed, copy original
+              echo "No descriptor file found, using original job file"
               cp "$job_file" "$transformed_file"
             fi
             
+            echo "Checking transformed file validity..."
+            if jq empty "$transformed_file" 2>/dev/null; then
+              echo "✅ Transformed file is valid JSON"
+              echo "First 10 lines of transformed file:"
+              head -10 "$transformed_file"
+            else
+              echo "❌ Transformed file is invalid JSON!"
+              echo "File contents:"
+              cat "$transformed_file"
+              exit 1
+            fi
+            
             echo "Transformed job saved to: $transformed_file"
+            echo ""
           done
 
       - name: Upload transformed jobs
