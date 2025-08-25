@@ -7,12 +7,14 @@ on:
       - 'jobs/**'
       - 'deploy-descriptors/**'
       - 'connection-profiles/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
     paths:
       - 'jobs/**'
       - 'deploy-descriptors/**'
       - 'connection-profiles/**'
+      - '.github/workflows/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -191,7 +193,15 @@ jobs:
             
             if [[ -f "$DESCRIPTOR_FILE" ]]; then
               echo "Using descriptor file: $DESCRIPTOR_FILE"
-              # Transform with descriptor file and capture any stderr
+              echo "Descriptor file contents:"
+              cat "$DESCRIPTOR_FILE"
+              echo ""
+              echo "Original job file contents:"
+              cat "$job_file"
+              echo ""
+              
+              # Transform with descriptor file - exactly like your working example
+              echo "Running: ctm deploy transform $job_file $DESCRIPTOR_FILE"
               docker run --rm \
                 -e CTM_ENDPOINT="$CTM_ENDPOINT" \
                 -e CTM_API_TOKEN="$CTM_API_TOKEN" \
@@ -199,36 +209,40 @@ jobs:
                 -v "$PWD:/workspace" \
                 -w /workspace \
                 ${{ env.DOCKER_IMAGE }} \
-                bash -c "ctm deploy transform '$job_file' '$DESCRIPTOR_FILE' 2>/dev/null" > "$transformed_file"
+                ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > "$transformed_file"
               
               TRANSFORM_EXIT_CODE=$?
               echo "Transform exit code: $TRANSFORM_EXIT_CODE"
               
-              # Check if transformation failed or produced invalid output
-              if [[ $TRANSFORM_EXIT_CODE -ne 0 ]] || [[ ! -s "$transformed_file" ]] || ! jq empty "$transformed_file" 2>/dev/null; then
-                echo "⚠️  Transformation failed or produced invalid JSON, using original file"
-                cp "$job_file" "$transformed_file"
+              # Show what was actually output
+              echo "Transform output file size: $(wc -c < "$transformed_file" || echo "0") bytes"
+              if [[ -s "$transformed_file" ]]; then
+                echo "Transformed file contents:"
+                cat "$transformed_file"
+                echo ""
               else
-                echo "✅ Transformation successful"
+                echo "❌ Transformation produced empty file!"
+                exit 1
+              fi
+              
+              # Validate JSON
+              if jq empty "$transformed_file" 2>/dev/null; then
+                echo "✅ Transformation successful - valid JSON produced"
+              else
+                echo "❌ Transformation failed - invalid JSON produced"
+                echo "Raw file contents:"
+                cat "$transformed_file"
+                exit 1
               fi
             else
-              echo "No descriptor file found, using original job file"
+              echo "❌ Descriptor file not found: $DESCRIPTOR_FILE"
+              echo "Available files in deploy-descriptors/:"
+              ls -la deploy-descriptors/ || echo "deploy-descriptors directory not found"
+              echo "Using original job file without transformation"
               cp "$job_file" "$transformed_file"
             fi
             
-            echo "Checking transformed file validity..."
-            if jq empty "$transformed_file" 2>/dev/null; then
-              echo "✅ Transformed file is valid JSON"
-              echo "First 10 lines of transformed file:"
-              head -10 "$transformed_file"
-            else
-              echo "❌ Transformed file is invalid JSON!"
-              echo "File contents:"
-              cat "$transformed_file"
-              exit 1
-            fi
-            
-            echo "Transformed job saved to: $transformed_file"
+            echo "Final transformed job saved to: $transformed_file"
             echo ""
           done
 
