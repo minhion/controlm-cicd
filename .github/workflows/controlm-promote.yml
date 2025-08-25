@@ -22,7 +22,10 @@ on:
         required: true
         default: 'development'
         type: choice
-        options: [ development, test, production ]
+        options:
+          - development
+          - test
+          - production
       job_file:
         description: 'Specific job file to deploy (optional)'
         required: false
@@ -40,16 +43,13 @@ jobs:
   determine-environment:
     runs-on: ubuntu-latest
     outputs:
-      target_env:    ${{ steps.set-env.outputs.target_env }}
-      ctm_endpoint:  ${{ steps.set-env.outputs.ctm_endpoint }}
-      ctm_env_name:  ${{ steps.set-env.outputs.ctm_env_name }}
+      target_env: ${{ steps.set-env.outputs.target_env }}
+      ctm_endpoint: ${{ steps.set-env.outputs.ctm_endpoint }}
+      ctm_env_name: ${{ steps.set-env.outputs.ctm_env_name }}
       descriptor_file: ${{ steps.set-env.outputs.descriptor_file }}
-      ctm_server:    ${{ steps.set-env.outputs.ctm_server }}
-      token_name:    ${{ steps.set-env.outputs.token_name }}
     steps:
       - name: Determine target environment
         id: set-env
-        shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TARGET_ENV="${{ github.event.inputs.environment }}"
@@ -60,29 +60,26 @@ jobs:
           else
             TARGET_ENV="development"
           fi
+          
           echo "target_env=$TARGET_ENV" >> $GITHUB_OUTPUT
-
-          case "$TARGET_ENV" in
+          echo "Target environment: $TARGET_ENV"
+          
+          # Set environment-specific variables
+          case $TARGET_ENV in
             "production")
               echo "ctm_endpoint=https://se-prod-aapi.us1.controlm.com/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=prod" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-production.json" >> $GITHUB_OUTPUT
-              echo "ctm_server=IN01" >> $GITHUB_OUTPUT
-              echo "token_name=CTM_API_TOKEN_PROD" >> $GITHUB_OUTPUT
               ;;
             "test")
               echo "ctm_endpoint=https://192.168.1.65:8443/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=test" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-test.json" >> $GITHUB_OUTPUT
-              echo "ctm_server=IN01" >> $GITHUB_OUTPUT
-              echo "token_name=CTM_API_TOKEN_TEST" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "ctm_endpoint=https://192.168.1.65:8443/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=dev" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-development.json" >> $GITHUB_OUTPUT
-              echo "ctm_server=IN01" >> $GITHUB_OUTPUT
-              echo "token_name=CTM_API_TOKEN_DEV" >> $GITHUB_OUTPUT
               ;;
           esac
 
@@ -93,32 +90,18 @@ jobs:
       job_files: ${{ steps.find-jobs.outputs.job_files }}
       validation_results: ${{ steps.validate.outputs.results }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to Control-M (persist ~/.ctm)
-        env:
-          CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/.ctm"
-          docker run --rm \
-            -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-            -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-            -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-            ${{ env.DOCKER_IMAGE }} \
-            bash -lc 'ctm login -a "$CTM_ENDPOINT" -t "$CTM_API_TOKEN"'
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Find job files
         id: find-jobs
-        shell: bash
         run: |
           if [[ -n "${{ github.event.inputs.job_file }}" ]]; then
+            # Specific job file provided
             JOB_FILES="${{ github.event.inputs.job_file }}"
           else
-            JOB_FILES="$(find jobs/ -type f -name '*.json' | sort | tr '\n' ' ')"
-          fi
-          if [[ -z "$JOB_FILES" ]]; then
-            echo "No job files found under jobs/"; exit 1
+            # Find all JSON files in jobs directory
+            JOB_FILES=$(find jobs/ -name "*.json" -type f | tr '\n' ' ')
           fi
           echo "job_files=$JOB_FILES" >> $GITHUB_OUTPUT
           echo "Found job files: $JOB_FILES"
@@ -127,103 +110,169 @@ jobs:
         id: validate
         env:
           CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
+          CTM_API_TOKEN: ${{ secrets.CTM_API_TOKEN }}
           CTM_ENV_NAME: ${{ needs.determine-environment.outputs.ctm_env_name }}
-        shell: bash
         run: |
+          VALIDATION_RESULTS=""
           DESCRIPTOR_FILE="${{ needs.determine-environment.outputs.descriptor_file }}"
-          if [[ -n "$DESCRIPTOR_FILE" && ! -f "$DESCRIPTOR_FILE" ]]; then
-            echo "Descriptor file not found: $DESCRIPTOR_FILE"; exit 1
+          
+          # Check if descriptor file exists
+          if [[ ! -f "$DESCRIPTOR_FILE" ]]; then
+            echo "Warning: Descriptor file $DESCRIPTOR_FILE not found. Using jobs without transformation."
+            DESCRIPTOR_FILE=""
           fi
-          RESULTS=""
+          
           for job_file in ${{ steps.find-jobs.outputs.job_files }}; do
-            echo "Validating: $job_file"
+            echo "Validating job file: $job_file"
+            
             if [[ -n "$DESCRIPTOR_FILE" ]]; then
-              RESULT="$(docker run --rm \
+              # Validate with descriptor file
+              RESULT=$(docker run --rm \
                 -e CTM_ENDPOINT="$CTM_ENDPOINT" \
                 -e CTM_API_TOKEN="$CTM_API_TOKEN" \
                 -e CTM_ENV_NAME="$CTM_ENV_NAME" \
-                -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-                -v "$PWD:/workspace" -w /workspace \
+                -v "$PWD:/workspace" \
+                -w /workspace \
                 ${{ env.DOCKER_IMAGE }} \
-                ctm build "$job_file" "$DESCRIPTOR_FILE" 2>&1)"
+                ctm build "$job_file" "$DESCRIPTOR_FILE" 2>&1)
             else
-              RESULT="$(docker run --rm \
+              # Validate without descriptor file
+              RESULT=$(docker run --rm \
                 -e CTM_ENDPOINT="$CTM_ENDPOINT" \
                 -e CTM_API_TOKEN="$CTM_API_TOKEN" \
                 -e CTM_ENV_NAME="$CTM_ENV_NAME" \
-                -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-                -v "$PWD:/workspace" -w /workspace \
+                -v "$PWD:/workspace" \
+                -w /workspace \
                 ${{ env.DOCKER_IMAGE }} \
-                ctm build "$job_file" 2>&1)"
+                ctm build "$job_file" 2>&1)
             fi
+            
+            echo "Validation result for $job_file:"
             echo "$RESULT"
+            
+            # Check if validation failed
             if echo "$RESULT" | grep -q '"errors"'; then
-              echo "::error::Validation failed for $job_file"; exit 1
+              echo "❌ Validation failed for $job_file"
+              echo "::error::Validation failed for $job_file: $RESULT"
+              exit 1
+            else
+              echo "✅ Validation passed for $job_file"
             fi
-            RESULTS="$RESULTS\n$job_file: PASSED"
+            
+            VALIDATION_RESULTS="$VALIDATION_RESULTS\n$job_file: PASSED"
           done
-          echo "results=$RESULTS" >> $GITHUB_OUTPUT
+          
+          echo "results=$VALIDATION_RESULTS" >> $GITHUB_OUTPUT
 
   transform-jobs:
     needs: [determine-environment, validate-and-build]
     runs-on: ubuntu-latest
+    if: success()
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Ensure jq
-        run: sudo apt-get update -y && sudo apt-get install -y jq
-
-      - name: Login to Control-M (persist ~/.ctm)
-        env:
-          CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/.ctm"
-          docker run --rm \
-            -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-            -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-            -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-            ${{ env.DOCKER_IMAGE }} \
-            bash -lc 'ctm login -a "$CTM_ENDPOINT" -t "$CTM_API_TOKEN"'
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Transform jobs for target environment
         env:
           CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
+          CTM_API_TOKEN: ${{ secrets.CTM_API_TOKEN }}
           CTM_ENV_NAME: ${{ needs.determine-environment.outputs.ctm_env_name }}
-        shell: bash
         run: |
           DESCRIPTOR_FILE="${{ needs.determine-environment.outputs.descriptor_file }}"
+          
+          # Create transformed directory
           mkdir -p transformed-jobs
+          
           for job_file in ${{ needs.validate-and-build.outputs.job_files }}; do
-            base="$(basename "$job_file" .json)"
-            out="transformed-jobs/${base}-transformed.json"
-            echo "Transforming: $job_file  ->  $out"
-            docker run --rm \
-              -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-              -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-              -e CTM_ENV_NAME="$CTM_ENV_NAME" \
-              -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-              -v "$PWD:/workspace" -w /workspace \
-              ${{ env.DOCKER_IMAGE }} \
-              ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > _tmp_transform.txt
-            code=$?
-            if [[ $code -ne 0 || ! -s _tmp_transform.txt ]]; then
-              echo "Transform failed or produced no output"; exit 1
-            fi
-            # Keep the LAST JSON block to avoid any banner lines
-            start_line="$(grep -n '{' _tmp_transform.txt | tail -1 | cut -d: -f1 || echo 0)"
-            if [[ "$start_line" -gt 0 ]]; then
-              tail -n +"$start_line" _tmp_transform.txt > "$out"
+            echo "========================================"
+            echo "Transforming job file: $job_file"
+            echo "========================================"
+            
+            base_name=$(basename "$job_file" .json)
+            transformed_file="transformed-jobs/${base_name}-transformed.json"
+            
+            if [[ -f "$DESCRIPTOR_FILE" ]]; then
+              echo "Using descriptor file: $DESCRIPTOR_FILE"
+              echo "Descriptor file contents:"
+              cat "$DESCRIPTOR_FILE"
+              echo ""
+              echo "Original job file contents:"
+              cat "$job_file"
+              echo ""
+              
+              # Transform with descriptor file - extract only the last JSON block
+              echo "Running: ctm deploy transform $job_file $DESCRIPTOR_FILE"
+              docker run --rm \
+                -e CTM_ENDPOINT="$CTM_ENDPOINT" \
+                -e CTM_API_TOKEN="$CTM_API_TOKEN" \
+                -e CTM_ENV_NAME="$CTM_ENV_NAME" \
+                -v "$PWD:/workspace" \
+                -w /workspace \
+                ${{ env.DOCKER_IMAGE }} \
+                ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > temp_transform_output.txt
+              
+              TRANSFORM_EXIT_CODE=$?
+              echo "Transform exit code: $TRANSFORM_EXIT_CODE"
+              
+              # Extract only the actual transformed JSON (the last complete JSON block)
+              if [[ $TRANSFORM_EXIT_CODE -eq 0 ]] && [[ -s temp_transform_output.txt ]]; then
+                # Find the line number of the last occurrence of a line starting with '{'
+                # This should be the actual transformed JSON, not the CLI banner
+                LAST_JSON_LINE=$(grep -n "^{" temp_transform_output.txt | tail -1 | cut -d: -f1)
+                
+                if [[ -n "$LAST_JSON_LINE" ]]; then
+                  echo "Extracting JSON starting from line $LAST_JSON_LINE"
+                  tail -n +$LAST_JSON_LINE temp_transform_output.txt > "$transformed_file"
+                else
+                  echo "❌ No JSON block found in transform output!"
+                  echo "Full transform output:"
+                  cat temp_transform_output.txt
+                  rm temp_transform_output.txt
+                  exit 1
+                fi
+                
+                # Clean up temp file
+                rm temp_transform_output.txt
+                
+                echo "Transform output file size: $(wc -c < "$transformed_file" || echo "0") bytes"
+                
+                if [[ -s "$transformed_file" ]]; then
+                  echo "Extracted JSON content (first 10 lines):"
+                  head -10 "$transformed_file"
+                  echo ""
+                else
+                  echo "❌ No JSON content extracted!"
+                  exit 1
+                fi
+              else
+                echo "❌ Transform command failed or produced no output"
+                if [[ -f temp_transform_output.txt ]]; then
+                  echo "Transform output:"
+                  cat temp_transform_output.txt
+                  rm temp_transform_output.txt
+                fi
+                exit 1
+              fi
+              
+              # Validate JSON
+              if jq empty "$transformed_file" 2>/dev/null; then
+                echo "✅ Transformation successful - valid JSON produced"
+              else
+                echo "❌ Transformation failed - invalid JSON produced"
+                echo "Raw file contents:"
+                cat "$transformed_file"
+                exit 1
+              fi
             else
-              echo "Could not locate JSON in transform output"; exit 1
+              echo "❌ Descriptor file not found: $DESCRIPTOR_FILE"
+              echo "Available files in deploy-descriptors/:"
+              ls -la deploy-descriptors/ || echo "deploy-descriptors directory not found"
+              echo "Using original job file without transformation"
+              cp "$job_file" "$transformed_file"
             fi
-            rm -f _tmp_transform.txt
-            # Sanity check it's valid JSON
-            if ! jq empty "$out" >/dev/null 2>&1; then
-              echo "Invalid JSON produced by transform for $job_file"; exit 1
-            fi
+            
+            echo "Final transformed job saved to: $transformed_file"
+            echo ""
           done
 
       - name: Upload transformed jobs
@@ -240,23 +289,8 @@ jobs:
     outputs:
       deployed_folders: ${{ steps.deploy.outputs.deployed_folders }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Ensure jq
-        run: sudo apt-get update -y && sudo apt-get install -y jq
-
-      - name: Login to Control-M (persist ~/.ctm)
-        env:
-          CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/.ctm"
-          docker run --rm \
-            -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-            -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-            -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-            ${{ env.DOCKER_IMAGE }} \
-            bash -lc 'ctm login -a "$CTM_ENDPOINT" -t "$CTM_API_TOKEN"'
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Download transformed jobs
         uses: actions/download-artifact@v4
@@ -268,121 +302,157 @@ jobs:
         id: deploy
         env:
           CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
+          CTM_API_TOKEN: ${{ secrets.CTM_API_TOKEN }}
           CTM_ENV_NAME: ${{ needs.determine-environment.outputs.ctm_env_name }}
-        shell: bash
         run: |
           DEPLOYED_FOLDERS=""
-          shopt -s nullglob
-          for tf in transformed-jobs/*-transformed.json; do
-            echo "Deploying: $tf"
-            RESULT="$(docker run --rm \
+          
+          # Enable verbose logging
+          set -x
+          
+          for transformed_file in transformed-jobs/*-transformed.json; do
+            echo "========================================"
+            echo "Deploying job file: $transformed_file"
+            echo "========================================"
+            
+            # Show file contents for debugging
+            echo "File contents:"
+            cat "$transformed_file"
+            echo ""
+            echo "========================================"
+            
+            # Run deployment with more verbose output
+            echo "Running Control-M deployment command..."
+            RESULT=$(docker run --rm \
               -e CTM_ENDPOINT="$CTM_ENDPOINT" \
               -e CTM_API_TOKEN="$CTM_API_TOKEN" \
               -e CTM_ENV_NAME="$CTM_ENV_NAME" \
-              -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-              -v "$PWD:/workspace" -w /workspace \
+              -v "$PWD:/workspace" \
+              -w /workspace \
               ${{ env.DOCKER_IMAGE }} \
-              bash -lc 'ctm deploy "'"$tf"'"' 2>&1)"
+              bash -c "echo 'Container environment:' && env | grep CTM && echo 'Running deploy command:' && ctm deploy '$transformed_file'" 2>&1)
+            
+            EXIT_CODE=$?
+            echo "Docker exit code: $EXIT_CODE"
+            echo "========================================"
+            echo "Full deployment result for $transformed_file:"
             echo "$RESULT"
-            if echo "$RESULT" | grep -q '"errors"'; then
-              echo "::error::Deployment failed for $tf"; exit 1
+            echo "========================================"
+            
+            # Check if deployment failed - look for both errors and exit code
+            if [[ $EXIT_CODE -ne 0 ]] || echo "$RESULT" | grep -q '"errors"'; then
+              echo "❌ Deployment failed for $transformed_file"
+              echo "Exit code: $EXIT_CODE"
+              if echo "$RESULT" | grep -q '"errors"'; then
+                echo "Error details:"
+                echo "$RESULT" | jq '.errors' 2>/dev/null || echo "$RESULT"
+              fi
+              echo "::error::Deployment failed for $transformed_file with exit code $EXIT_CODE: $RESULT"
+              exit 1
+            else
+              echo "✅ Deployment succeeded for $transformed_file"
+              
+              # Extract deployed folders from result
+              FOLDERS=$(echo "$RESULT" | jq -r '.[].deployedFolders[]?' 2>/dev/null || echo "")
+              if [[ -n "$FOLDERS" ]]; then
+                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
+                echo "Extracted folders: $FOLDERS"
+              fi
             fi
-            # Extract deployed folders if present
-            FOLDERS="$(echo "$RESULT" | jq -r '.[].deployedFolders[]?' 2>/dev/null || true)"
-            if [[ -n "$FOLDERS" ]]; then
-              DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
-            fi
+            echo ""
           done
+          
           echo "deployed_folders=$DEPLOYED_FOLDERS" >> $GITHUB_OUTPUT
-          echo "Deployed folders: $DEPLOYED_FOLDERS"
-
-      - name: Upload deploy receipts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-receipts-${{ needs.determine-environment.outputs.target_env }}
-          path: transformed-jobs/*-transformed.json
+          echo "Successfully deployed folders: $DEPLOYED_FOLDERS"
 
   run-jobs:
     needs: [determine-environment, deploy-jobs]
     runs-on: ubuntu-latest
     if: success() && (github.event.inputs.run_jobs == 'true' || github.ref == 'refs/heads/main')
     steps:
-      - name: Ensure jq
-        run: sudo apt-get update -y && sudo apt-get install -y jq
-
-      - name: Login to Control-M (persist ~/.ctm)
+      - name: Run deployed Control-M jobs
         env:
           CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/.ctm"
-          docker run --rm \
-            -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-            -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-            -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-            ${{ env.DOCKER_IMAGE }} \
-            bash -lc 'ctm login -a "$CTM_ENDPOINT" -t "$CTM_API_TOKEN"'
-
-      - name: Order, wait, and fetch outputs
-        env:
-          CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
-          CTM_API_TOKEN: ${{ secrets[needs.determine-environment.outputs.token_name] }}
+          CTM_API_TOKEN: ${{ secrets.CTM_API_TOKEN }}
           CTM_ENV_NAME: ${{ needs.determine-environment.outputs.ctm_env_name }}
-          CTM_SERVER:   ${{ needs.determine-environment.outputs.ctm_server }}
-        shell: bash
         run: |
-          mkdir -p _ctm_output
           for folder in ${{ needs.deploy-jobs.outputs.deployed_folders }}; do
-            [[ -z "$folder" ]] && continue
-            echo "Ordering folder '$folder' on server '$CTM_SERVER'"
-            ORDER_JSON="$(docker run --rm \
+            echo "Running folder: $folder"
+            
+            # Order the job/folder
+            RUN_RESULT=$(docker run --rm \
               -e CTM_ENDPOINT="$CTM_ENDPOINT" \
               -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-              -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
+              -e CTM_ENV_NAME="$CTM_ENV_NAME" \
               ${{ env.DOCKER_IMAGE }} \
-              bash -lc 'ctm run order "'"$CTM_SERVER"'" "'"$folder"'"')"
-            echo "$ORDER_JSON"
-            RUN_ID="$(printf "%s" "$ORDER_JSON" | sed -n 's/.*"runId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-            if [[ -z "$RUN_ID" ]]; then
-              echo "::error::Could not parse runId for $folder"; exit 1
+              ctm run order "${{ needs.determine-environment.outputs.ctm_env_name }}" "$folder" 2>&1)
+            
+            echo "Run result for $folder:"
+            echo "$RUN_RESULT"
+            
+            # Extract run ID
+            RUN_ID=$(echo "$RUN_RESULT" | jq -r '.runId' 2>/dev/null)
+            
+            if [[ -n "$RUN_ID" && "$RUN_ID" != "null" ]]; then
+              echo "Started job execution with Run ID: $RUN_ID"
+              
+              # Wait and check status
+              sleep 30
+              
+              STATUS_RESULT=$(docker run --rm \
+                -e CTM_ENDPOINT="$CTM_ENDPOINT" \
+                -e CTM_API_TOKEN="$CTM_API_TOKEN" \
+                -e CTM_ENV_NAME="$CTM_ENV_NAME" \
+                ${{ env.DOCKER_IMAGE }} \
+                ctm run status "$RUN_ID" 2>&1)
+              
+              echo "Status for Run ID $RUN_ID:"
+              echo "$STATUS_RESULT"
+              
+              # Check completion status
+              COMPLETION=$(echo "$STATUS_RESULT" | jq -r '.completion' 2>/dev/null)
+              if [[ "$COMPLETION" == "Completed" ]]; then
+                echo "✅ Job execution completed successfully for folder: $folder"
+              else
+                echo "⏳ Job execution in progress for folder: $folder"
+              fi
+            else
+              echo "❌ Failed to start job execution for folder: $folder"
+              echo "::error::Failed to start job execution for folder: $folder"
             fi
-            docker run --rm \
-              -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-              -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-              -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-              ${{ env.DOCKER_IMAGE }} \
-              bash -lc 'ctm run status "'"$RUN_ID"'" --wait'
-            safe_folder="$(echo "$folder" | tr '/ ' '__')"
-            docker run --rm \
-              -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-              -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-              -v "$RUNNER_TEMP/.ctm:/root/.ctm" \
-              -v "$PWD:/workspace" -w /workspace \
-              ${{ env.DOCKER_IMAGE }} \
-              bash -lc 'ctm run results "'"$RUN_ID"'" --output-dir "/workspace/_ctm_output/'"$safe_folder"'"'
           done
-
-      - name: Upload run outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-outputs-${{ needs.determine-environment.outputs.target_env }}
-          path: _ctm_output/**
 
   notify:
     needs: [determine-environment, validate-and-build, deploy-jobs, run-jobs]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Summary
+      - name: Create deployment summary
         run: |
           echo "## Control-M Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ needs.determine-environment.outputs.target_env }}" >> $GITHUB_STEP_SUMMARY
           echo "**Endpoint:** ${{ needs.determine-environment.outputs.ctm_endpoint }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Server:** ${{ needs.determine-environment.outputs.ctm_server }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Validation: **${{ needs.validate-and-build.result }}**" >> $GITHUB_STEP_SUMMARY
-          echo "Deployment: **${{ needs.deploy-jobs.result }}**" >> $GITHUB_STEP_SUMMARY
-          echo "Run Jobs: **${{ needs.run-jobs.result }}**" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.validate-and-build.result }}" == "success" ]]; then
+            echo "✅ **Validation:** Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Validation:** Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.deploy-jobs.result }}" == "success" ]]; then
+            echo "✅ **Deployment:** Succeeded" >> $GITHUB_STEP_SUMMARY
+            echo "**Deployed Folders:** ${{ needs.deploy-jobs.outputs.deployed_folders }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.deploy-jobs.result }}" == "skipped" ]]; then
+            echo "⏭️ **Deployment:** Skipped (not main/develop branch)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Deployment:** Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.run-jobs.result }}" == "success" ]]; then
+            echo "✅ **Job Execution:** Completed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.run-jobs.result }}" == "skipped" ]]; then
+            echo "⏭️ **Job Execution:** Skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Job Execution:** Failed" >> $GITHUB_STEP_SUMMARY
+          fi
