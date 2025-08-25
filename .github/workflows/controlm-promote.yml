@@ -352,11 +352,23 @@ jobs:
             else
               echo "✅ Deployment succeeded for $transformed_file"
               
-              # Extract deployed folders from result
-              FOLDERS=$(echo "$RESULT" | jq -r '.[].deployedFolders[]?' 2>/dev/null || echo "")
+              # Extract deployed folders from result - handle the JSON array format
+              echo "Parsing deployment result for folders..."
+              FOLDERS=$(echo "$RESULT" | jq -r '.[0].deployedFolders[]?' 2>/dev/null || echo "")
+              
               if [[ -n "$FOLDERS" ]]; then
                 DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
                 echo "Extracted folders: $FOLDERS"
+                echo "Total deployed folders so far: $DEPLOYED_FOLDERS"
+              else
+                echo "⚠️ No deployedFolders found in result"
+                echo "Attempting alternative folder extraction..."
+                # Try alternative extraction method
+                ALT_FOLDERS=$(echo "$RESULT" | grep -o '"deployedFolders":\s*\[\s*"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/' || echo "")
+                if [[ -n "$ALT_FOLDERS" ]]; then
+                  DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $ALT_FOLDERS"
+                  echo "Alternative extraction found: $ALT_FOLDERS"
+                fi
               fi
             fi
             echo ""
