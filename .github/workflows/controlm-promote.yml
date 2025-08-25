@@ -209,19 +209,32 @@ jobs:
                 -v "$PWD:/workspace" \
                 -w /workspace \
                 ${{ env.DOCKER_IMAGE }} \
-                ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > "$transformed_file"
+                ctm deploy transform "$job_file" "$DESCRIPTOR_FILE" > temp_transform_output.txt
               
               TRANSFORM_EXIT_CODE=$?
               echo "Transform exit code: $TRANSFORM_EXIT_CODE"
               
-              # Show what was actually output
-              echo "Transform output file size: $(wc -c < "$transformed_file" || echo "0") bytes"
-              if [[ -s "$transformed_file" ]]; then
-                echo "Transformed file contents:"
-                cat "$transformed_file"
-                echo ""
+              # Extract only the JSON part (starting from the first '{' and ending at the last '}')
+              # This removes the CLI output that comes before the actual JSON
+              if [[ $TRANSFORM_EXIT_CODE -eq 0 ]] && [[ -s temp_transform_output.txt ]]; then
+                # Find the first line that starts with '{' and extract from there to end
+                sed -n '/{/,$p' temp_transform_output.txt > "$transformed_file"
+                
+                # Clean up temp file
+                rm temp_transform_output.txt
+                
+                echo "Transform output file size: $(wc -c < "$transformed_file" || echo "0") bytes"
+                
+                if [[ -s "$transformed_file" ]]; then
+                  echo "Extracted JSON content (first 20 lines):"
+                  head -20 "$transformed_file"
+                  echo ""
+                else
+                  echo "❌ No JSON content extracted!"
+                  exit 1
+                fi
               else
-                echo "❌ Transformation produced empty file!"
+                echo "❌ Transform command failed or produced no output"
                 exit 1
               fi
               
