@@ -26,6 +26,11 @@ on:
           - development
           - test
           - production
+      server_name:
+        description: 'Control-M Server Name (e.g., IN01, TEST_SERVER)'
+        required: false
+        type: string
+        default: ''
       job_file:
         description: 'Specific job file to deploy (optional)'
         required: false
@@ -46,6 +51,7 @@ jobs:
       target_env: ${{ steps.set-env.outputs.target_env }}
       ctm_endpoint: ${{ steps.set-env.outputs.ctm_endpoint }}
       ctm_env_name: ${{ steps.set-env.outputs.ctm_env_name }}
+      ctm_server_name: ${{ steps.set-env.outputs.ctm_server_name }}
       descriptor_file: ${{ steps.set-env.outputs.descriptor_file }}
     steps:
       - name: Determine target environment
@@ -64,24 +70,44 @@ jobs:
           echo "target_env=$TARGET_ENV" >> $GITHUB_OUTPUT
           echo "Target environment: $TARGET_ENV"
           
-          # Set environment-specific variables
+          # Set environment-specific variables including server names
           case $TARGET_ENV in
             "production")
               echo "ctm_endpoint=https://se-prod-aapi.us1.controlm.com/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=prod" >> $GITHUB_OUTPUT
+              # Use input server name if provided, otherwise default to IN01
+              SERVER_NAME="${{ github.event.inputs.server_name }}"
+              if [[ -z "$SERVER_NAME" ]]; then
+                SERVER_NAME="IN01"
+              fi
+              echo "ctm_server_name=$SERVER_NAME" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-production.json" >> $GITHUB_OUTPUT
               ;;
             "test")
               echo "ctm_endpoint=https://192.168.1.65:8443/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=test" >> $GITHUB_OUTPUT
+              # Use input server name if provided, otherwise default to TEST_SERVER
+              SERVER_NAME="${{ github.event.inputs.server_name }}"
+              if [[ -z "$SERVER_NAME" ]]; then
+                SERVER_NAME="TEST_SERVER"
+              fi
+              echo "ctm_server_name=$SERVER_NAME" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-test.json" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "ctm_endpoint=https://192.168.1.65:8443/automation-api" >> $GITHUB_OUTPUT
               echo "ctm_env_name=dev" >> $GITHUB_OUTPUT
+              # Use input server name if provided, otherwise default to DEV_SERVER
+              SERVER_NAME="${{ github.event.inputs.server_name }}"
+              if [[ -z "$SERVER_NAME" ]]; then
+                SERVER_NAME="DEV_SERVER"
+              fi
+              echo "ctm_server_name=$SERVER_NAME" >> $GITHUB_OUTPUT
               echo "descriptor_file=deploy-descriptors/descriptor-development.json" >> $GITHUB_OUTPUT
               ;;
           esac
+          
+          echo "Using Control-M Server: $SERVER_NAME"
 
   validate-and-build:
     needs: determine-environment
@@ -352,9 +378,27 @@ jobs:
             else
               echo "✅ Deployment succeeded for $transformed_file"
               
-              # Extract deployed folders from result - handle the JSON array format
+              # Extract deployed folders from result - improved parsing
               echo "Parsing deployment result for folders..."
-              FOLDERS=$(echo "$RESULT" | jq -r '.[0].deployedFolders[]?' 2>/dev/null || echo "")
+              
+              # Method 1: Try to extract from JSON array format
+              FOLDERS=$(echo "$RESULT" | jq -r 'if type == "array" then .[0].deployedFolders[]? else .deployedFolders[]? end' 2>/dev/null || echo "")
+              
+              # Method 2: If that fails, try extracting from simple object
+              if [[ -z "$FOLDERS" ]]; then
+                FOLDERS=$(echo "$RESULT" | jq -r '.deployedFolders[]?' 2>/dev/null || echo "")
+              fi
+              
+              # Method 3: If still no luck, try grep-based extraction
+              if [[ -z "$FOLDERS" ]]; then
+                FOLDERS=$(echo "$RESULT" | grep -oP '"deployedFolders":\s*\[\s*"\K[^"]*' 2>/dev/null || echo "")
+              fi
+              
+              # Method 4: Look for any folder-like patterns in the output
+              if [[ -z "$FOLDERS" ]]; then
+                echo "Trying pattern-based folder extraction..."
+                FOLDERS=$(echo "$RESULT" | grep -oP '[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+' 2>/dev/null | head -1 || echo "")
+              fi
               
               if [[ -n "$FOLDERS" ]]; then
                 DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
@@ -362,13 +406,13 @@ jobs:
                 echo "Total deployed folders so far: $DEPLOYED_FOLDERS"
               else
                 echo "⚠️ No deployedFolders found in result"
-                echo "Attempting alternative folder extraction..."
-                # Try alternative extraction method
-                ALT_FOLDERS=$(echo "$RESULT" | grep -o '"deployedFolders":\s*\[\s*"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/' || echo "")
-                if [[ -n "$ALT_FOLDERS" ]]; then
-                  DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $ALT_FOLDERS"
-                  echo "Alternative extraction found: $ALT_FOLDERS"
-                fi
+                echo "Full result for debugging:"
+                echo "$RESULT" | head -50
+                
+                # As fallback, try to extract folder name from job file
+                JOB_FOLDER=$(basename "$transformed_file" .json | sed 's/-transformed$//')
+                echo "Using fallback folder name: $JOB_FOLDER"
+                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $JOB_FOLDER"
               fi
             fi
             echo ""
@@ -380,58 +424,139 @@ jobs:
   run-jobs:
     needs: [determine-environment, deploy-jobs]
     runs-on: ubuntu-latest
-    if: success() && (github.event.inputs.run_jobs == 'true' || github.ref == 'refs/heads/main')
+    if: success() && needs.deploy-jobs.outputs.deployed_folders != '' && (github.event.inputs.run_jobs == 'true' || github.ref == 'refs/heads/main')
     steps:
+      - name: Debug configuration
+        run: |
+          echo "Server name: ${{ needs.determine-environment.outputs.ctm_server_name }}"
+          echo "Environment name: ${{ needs.determine-environment.outputs.ctm_env_name }}"
+          echo "Endpoint: ${{ needs.determine-environment.outputs.ctm_endpoint }}"
+          echo "Deployed folders: '${{ needs.deploy-jobs.outputs.deployed_folders }}'"
+          
       - name: Run deployed Control-M jobs
         env:
           CTM_ENDPOINT: ${{ needs.determine-environment.outputs.ctm_endpoint }}
           CTM_API_TOKEN: ${{ secrets.CTM_API_TOKEN }}
           CTM_ENV_NAME: ${{ needs.determine-environment.outputs.ctm_env_name }}
+          CTM_SERVER_NAME: ${{ needs.determine-environment.outputs.ctm_server_name }}
         run: |
-          for folder in ${{ needs.deploy-jobs.outputs.deployed_folders }}; do
-            echo "Running folder: $folder"
+          FOLDERS="${{ needs.deploy-jobs.outputs.deployed_folders }}"
+          
+          if [[ -z "$FOLDERS" || "$FOLDERS" == " " ]]; then
+            echo "❌ No deployed folders to run"
+            exit 1
+          fi
+          
+          # Split folders by space and process each
+          IFS=' ' read -ra FOLDER_ARRAY <<< "$FOLDERS"
+          
+          for folder in "${FOLDER_ARRAY[@]}"; do
+            # Skip empty folder names
+            if [[ -z "$folder" ]]; then
+              continue
+            fi
             
-            # Order the job/folder
+            echo "===========================================" 
+            echo "Running folder: '$folder' on server: '$CTM_SERVER_NAME'"
+            echo "==========================================="
+            
+            # Order the job/folder using the correct server name
+            echo "Executing: ctm run order '$CTM_SERVER_NAME' '$folder'"
+            
             RUN_RESULT=$(docker run --rm \
               -e CTM_ENDPOINT="$CTM_ENDPOINT" \
               -e CTM_API_TOKEN="$CTM_API_TOKEN" \
               -e CTM_ENV_NAME="$CTM_ENV_NAME" \
               ${{ env.DOCKER_IMAGE }} \
-              ctm run order "${{ needs.determine-environment.outputs.ctm_env_name }}" "$folder" 2>&1)
+              ctm run order "$CTM_SERVER_NAME" "$folder" 2>&1)
             
+            RUN_EXIT_CODE=$?
+            echo "Run command exit code: $RUN_EXIT_CODE"
             echo "Run result for $folder:"
             echo "$RUN_RESULT"
             
-            # Extract run ID
-            RUN_ID=$(echo "$RUN_RESULT" | jq -r '.runId' 2>/dev/null)
+            if [[ $RUN_EXIT_CODE -ne 0 ]]; then
+              echo "❌ Failed to start job execution for folder: $folder"
+              echo "::error::Failed to start job execution for folder: $folder - Exit code: $RUN_EXIT_CODE"
+              
+              # Check if it's a server name issue
+              if echo "$RUN_RESULT" | grep -i "server.*not found\|invalid.*server\|unknown.*server"; then
+                echo "::error::Server name '$CTM_SERVER_NAME' may be incorrect. Please verify the Control-M server name."
+              fi
+              continue
+            fi
+            
+            # Extract run ID with better parsing
+            RUN_ID=$(echo "$RUN_RESULT" | jq -r '.runId // empty' 2>/dev/null)
             
             if [[ -n "$RUN_ID" && "$RUN_ID" != "null" ]]; then
-              echo "Started job execution with Run ID: $RUN_ID"
+              echo "✅ Started job execution with Run ID: $RUN_ID"
               
               # Wait and check status
+              echo "Waiting 30 seconds before checking status..."
               sleep 30
               
-              STATUS_RESULT=$(docker run --rm \
-                -e CTM_ENDPOINT="$CTM_ENDPOINT" \
-                -e CTM_API_TOKEN="$CTM_API_TOKEN" \
-                -e CTM_ENV_NAME="$CTM_ENV_NAME" \
-                ${{ env.DOCKER_IMAGE }} \
-                ctm run status "$RUN_ID" 2>&1)
-              
-              echo "Status for Run ID $RUN_ID:"
-              echo "$STATUS_RESULT"
-              
-              # Check completion status
-              COMPLETION=$(echo "$STATUS_RESULT" | jq -r '.completion' 2>/dev/null)
-              if [[ "$COMPLETION" == "Completed" ]]; then
-                echo "✅ Job execution completed successfully for folder: $folder"
-              else
-                echo "⏳ Job execution in progress for folder: $folder"
-              fi
+              for attempt in {1..5}; do
+                echo "Status check attempt $attempt/5..."
+                
+                STATUS_RESULT=$(docker run --rm \
+                  -e CTM_ENDPOINT="$CTM_ENDPOINT" \
+                  -e CTM_API_TOKEN="$CTM_API_TOKEN" \
+                  -e CTM_ENV_NAME="$CTM_ENV_NAME" \
+                  ${{ env.DOCKER_IMAGE }} \
+                  ctm run status "$RUN_ID" 2>&1)
+                
+                STATUS_EXIT_CODE=$?
+                echo "Status command exit code: $STATUS_EXIT_CODE"
+                
+                if [[ $STATUS_EXIT_CODE -eq 0 ]]; then
+                  echo "Status for Run ID $RUN_ID:"
+                  echo "$STATUS_RESULT"
+                  
+                  # Check completion status
+                  COMPLETION=$(echo "$STATUS_RESULT" | jq -r '.completion // empty' 2>/dev/null)
+                  STATUS_STATE=$(echo "$STATUS_RESULT" | jq -r '.status // empty' 2>/dev/null)
+                  
+                  echo "Completion: '$COMPLETION', Status: '$STATUS_STATE'"
+                  
+                  if [[ "$COMPLETION" == "Completed" ]]; then
+                    echo "✅ Job execution completed successfully for folder: $folder"
+                    break
+                  elif [[ "$STATUS_STATE" == "Running" || "$STATUS_STATE" == "Executing" ]]; then
+                    echo "⏳ Job execution in progress for folder: $folder"
+                    if [[ $attempt -lt 5 ]]; then
+                      echo "Waiting 60 seconds before next check..."
+                      sleep 60
+                    fi
+                  elif [[ "$STATUS_STATE" == "Ended OK" || "$COMPLETION" == "OK" ]]; then
+                    echo "✅ Job execution ended successfully for folder: $folder"
+                    break
+                  else
+                    echo "ℹ️ Job status: '$STATUS_STATE', Completion: '$COMPLETION' for folder: $folder"
+                    if [[ $attempt -lt 5 ]]; then
+                      sleep 30
+                    fi
+                  fi
+                else
+                  echo "⚠️ Status check failed for Run ID $RUN_ID (attempt $attempt/5)"
+                  echo "$STATUS_RESULT"
+                  if [[ $attempt -lt 5 ]]; then
+                    sleep 15
+                  fi
+                fi
+              done
             else
-              echo "❌ Failed to start job execution for folder: $folder"
-              echo "::error::Failed to start job execution for folder: $folder"
+              echo "❌ Failed to extract Run ID from result for folder: $folder"
+              echo "Raw run result:"
+              echo "$RUN_RESULT"
+              
+              # Check if the job was actually ordered but response format is different
+              if echo "$RUN_RESULT" | grep -i "ordered\|submitted\|started"; then
+                echo "ℹ️ Job may have been ordered successfully despite missing Run ID"
+              fi
             fi
+            
+            echo ""
           done
 
   notify:
@@ -443,6 +568,7 @@ jobs:
         run: |
           echo "## Control-M Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ needs.determine-environment.outputs.target_env }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Server:** ${{ needs.determine-environment.outputs.ctm_server_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Endpoint:** ${{ needs.determine-environment.outputs.ctm_endpoint }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
