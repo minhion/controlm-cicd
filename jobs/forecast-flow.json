@@ -1,0 +1,246 @@
+{
+  "Defaults" : {
+	  "Host" : "<CTM_HOST_NAME>",
+    "ControlmServer" : "<CTM_SERVER_NAME>",
+    "Application" : "<USER_CODE>-forecast-flow",
+    "SubApplication" : "<USER_CODE>-forecast-flow",
+    "RunAs" : "controlm",
+    "CreatedBy" : "minh_nguyen2@bmc.com"
+  },
+  "<USER_CODE>-forecast-flow" : {
+    "Type" : "Folder",
+    "Variables" : [ {
+      "appid" : "481be8b9210a09cc3a3bcdcf190a3aa8"
+    }, {
+      "zipcode" : "68116"
+    }, {
+      "email" : "your_email@here.com"
+    } ],
+    "BusinessFields": [
+      {
+        "Usercode": "<USER_CODE>"
+      }
+    ],
+    "OrderMethod" : "Manual",
+    "SiteStandard": "XXXX",
+    "When" : {
+      "RuleBasedCalendars" : {
+        "Included" : [ "EVERYDAY" ],
+        "EVERYDAY" : {
+          "Type" : "Calendar:RuleBased",
+          "When" : {
+            "DaysRelation" : "OR",
+            "WeekDays" : [ "NONE" ],
+            "MonthDays" : [ "ALL" ]
+          }
+        }
+      }
+    },
+    "<USER_CODE>-forecast-flow-sla" : {
+      "Type" : "Job:SLAManagement",
+      "ServiceName" : "<USER_CODE>-forecast-flow-sla",
+      "ServicePriority" : "3",
+      "JobRunsDeviationsTolerance" : "3",
+      "CompleteIn" : {
+        "Time" : "0:5"
+      },
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "eventsToWaitFor" : {
+        "Type" : "WaitForEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getoutput-TO-<USER_CODE>-forecast-flow-sla"
+        } ]
+      },
+      "eventsToDelete" : {
+        "Type" : "DeleteEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getoutput-TO-<USER_CODE>-forecast-flow-sla"
+        } ]
+      }
+    },
+    "<USER_CODE>-getoutput" : {
+      "Type" : "Job:Command",
+      "Command" : "echo \\\"Today, the high temperature in %%city %%country is %%hightemp F.\\\"",
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "IfBase:Folder:CompletionStatus_0" : {
+        "Type" : "If:CompletionStatus",
+        "CompletionStatus" : "OK",
+        "Mail_0" : {
+          "Type" : "Action:Mail",
+          "Subject" : "Today's High Temperature",
+          "To" : "%%email",
+          "Message" : "Today, the high temperature in %%city %%country is %%hightemp F."
+        }
+      },
+      "eventsToWaitFor" : {
+        "Type" : "WaitForEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-countryvar-TO-<USER_CODE>-getoutput"
+        }, {
+          "Event" : "<USER_CODE>-cityvar-TO-<USER_CODE>-getoutput"
+        }, {
+          "Event" : "<USER_CODE>-hightempvar-TO-<USER_CODE>-getoutput"
+        } ]
+      },
+      "eventsToAdd" : {
+        "Type" : "AddEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getoutput-TO-SLA"
+        }, {
+          "Event" : "<USER_CODE>-getoutput-TO-<USER_CODE>-forecast-flow-sla"
+        } ]
+      },
+      "eventsToDelete" : {
+        "Type" : "DeleteEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-cityvar-TO-<USER_CODE>-getoutput"
+        }, {
+          "Event" : "<USER_CODE>-countryvar-TO-<USER_CODE>-getoutput"
+        }, {
+          "Event" : "<USER_CODE>-hightempvar-TO-<USER_CODE>-getoutput"
+        } ]
+      }
+    },
+    "<USER_CODE>-getweatherdata" : {
+      "Type" : "Job:Command",
+      "Command" : "wget \"https://api.openweathermap.org/data/2.5/weather?zip=%%zipcode,us&appid=%%appid&units=imperial\" -O $HOME/output.json",
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "eventsToAdd" : {
+        "Type" : "AddEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-countryvar"
+        }, {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-cityvar"
+        }, {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-hightempvar"
+        } ]
+      }
+    },
+    "<USER_CODE>-hightempvar" : {
+      "Type" : "Job:Command",
+      "Command" : "cd $HOME/ && high_temp=$(cat output.json | jq \".main.temp_max\") | echo \"$high_temp\"",
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "CaptureOutput_0" : {
+        "Type" : "Action:CaptureOutput",
+        "Capture" : "UpToEndOfLine",
+        "Search" : "high_temp=",
+        "VariableName" : "\\\\hightemp",
+        "ForwardBy" : {
+          "ColumnsOption" : "Characters"
+        }
+      },
+      "eventsToWaitFor" : {
+        "Type" : "WaitForEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-hightempvar"
+        } ]
+      },
+      "eventsToAdd" : {
+        "Type" : "AddEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-hightempvar-TO-<USER_CODE>-getoutput"
+        } ]
+      },
+      "eventsToDelete" : {
+        "Type" : "DeleteEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-hightempvar"
+        } ]
+      }
+    },
+    "<USER_CODE>-cityvar" : {
+      "Type" : "Job:Command",
+      "Command" : "cd $HOME/ && city=$(cat output.json | jq -r \".name\") | echo \"$city\"",
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "CaptureOutput_0" : {
+        "Type" : "Action:CaptureOutput",
+        "Capture" : "UpToEndOfLine",
+        "Search" : "city=",
+        "VariableName" : "\\\\city",
+        "ForwardBy" : {
+          "ColumnsOption" : "Characters"
+        }
+      },
+      "eventsToWaitFor" : {
+        "Type" : "WaitForEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-cityvar"
+        } ]
+      },
+      "eventsToAdd" : {
+        "Type" : "AddEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-cityvar-TO-<USER_CODE>-getoutput"
+        } ]
+      },
+      "eventsToDelete" : {
+        "Type" : "DeleteEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-cityvar"
+        } ]
+      }
+    },
+    "<USER_CODE>-countryvar" : {
+      "Type" : "Job:Command",
+      "Command" : "cd $HOME/ && country=$(cat output.json | jq -r \".sys.country\") | echo \"$country\"",
+      "When" : {
+        "WeekDays" : [ "NONE" ],
+        "Months" : [ "NONE" ],
+        "MonthDays" : [ "NONE" ],
+        "DaysRelation" : "OR"
+      },
+      "CaptureOutput_0" : {
+        "Type" : "Action:CaptureOutput",
+        "Capture" : "UpToEndOfLine",
+        "Search" : "country=",
+        "VariableName" : "\\\\country",
+        "ForwardBy" : {
+          "ColumnsOption" : "Characters"
+        }
+      },
+      "eventsToWaitFor" : {
+        "Type" : "WaitForEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-countryvar"
+        } ]
+      },
+      "eventsToAdd" : {
+        "Type" : "AddEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-countryvar-TO-<USER_CODE>-getoutput"
+        } ]
+      },
+      "eventsToDelete" : {
+        "Type" : "DeleteEvents",
+        "Events" : [ {
+          "Event" : "<USER_CODE>-getweatherdata-TO-<USER_CODE>-countryvar"
+        } ]
+      }
+    }
+  }
+}

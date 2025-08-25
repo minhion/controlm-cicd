@@ -1,0 +1,97 @@
+{
+    "DeployDescriptor": [
+      {
+        "Property": "SiteStandard",
+        "Assign": "SE Demo System Standard"
+      },
+      {
+        "Property": "RunAs",
+        "Assign": "ctmagent"
+      },
+      {
+        "Property": "ControlmServer",
+        "Assign": "IN01"
+      },
+      {
+        "Property": "Host",
+        "Assign": "zzz-linux-agent-01"
+      },
+      {
+        "Comment": "Update EMAIL variable to a new value",
+        "Property": "Variables[2].email",
+        "Assign": "minh_nguyen2@bmc.com"
+      },
+      {
+        "Comment": "Update ZIPCODE variable to a new value",
+        "Property": "Variables[1].zipcode",
+        "Assign": "75070"
+      },
+      {
+        "Property": "ServiceName",
+        "Replace": [{ "<USER_CODE>(.*)": "mqn$1" }]
+      },
+      {
+        "ApplyOn": { "Type": "Job" },
+        "Property": "@",
+        "Replace": [{ "<USER_CODE>(.*)": "mqn$1" }]
+      },
+      {
+        "ApplyOn": { "Type": "Folder", "@": ".*" },
+        "Property": "@.BusinessFields..Usercode",
+        "Replace": [
+          {
+            "<USER_CODE>(.*)": "mqn"
+          }
+        ]
+      },
+      {
+        "Property": "@[*].Events[*].Event",
+        "Replace": [
+          {
+            "<USER_CODE>(.*)<USER_CODE>(.*)": "mqn$1mqn$2"
+          }
+        ]
+      },
+      {
+        "Comment": "Changes the name of all folders to match the saas prod standard",
+        "Property": "@",
+        "ApplyOn": {
+          "Type": "Folder"
+        },
+        "Replace": [
+          {
+            "<USER_CODE>(.*)": "mqn$1-jac"
+          }
+        ]
+      },
+      {
+        "Comment": "Changes the name of all folders to match the helix prod standard",
+        "Property": "@",
+        "ApplyOn": {
+          "Type": "Folder"
+        },
+        "Replace": [
+          {
+            "zzz(.*)": "mqn$1-jac"
+          }
+        ]
+      },
+      {
+        "Property": "Application",
+        "Replace": [
+          {
+            "<USER_CODE>(.*)": "mqn$1-jac"
+          }
+        ]
+      },
+      {
+        "Property": "SubApplication",
+        "Replace": [
+          {
+            "<USER_CODE>(.*)": "mqn$1-jac"
+          }
+        ]
+      }
+    ]
+  }
+  
