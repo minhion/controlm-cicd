@@ -237,9 +237,22 @@ jobs:
         run: |
           DEPLOYED_FOLDERS=""
           
+          # Enable verbose logging
+          set -x
+          
           for transformed_file in transformed-jobs/*-transformed.json; do
+            echo "========================================"
             echo "Deploying job file: $transformed_file"
+            echo "========================================"
             
+            # Show file contents for debugging
+            echo "File contents:"
+            cat "$transformed_file"
+            echo ""
+            echo "========================================"
+            
+            # Run deployment with more verbose output
+            echo "Running Control-M deployment command..."
             RESULT=$(docker run --rm \
               -e CTM_ENDPOINT="$CTM_ENDPOINT" \
               -e CTM_API_TOKEN="$CTM_API_TOKEN" \
@@ -247,15 +260,24 @@ jobs:
               -v "$PWD:/workspace" \
               -w /workspace \
               ${{ env.DOCKER_IMAGE }} \
-              ctm deploy "$transformed_file" 2>&1)
+              bash -c "echo 'Container environment:' && env | grep CTM && echo 'Running deploy command:' && ctm deploy '$transformed_file'" 2>&1)
             
-            echo "Deployment result for $transformed_file:"
+            EXIT_CODE=$?
+            echo "Docker exit code: $EXIT_CODE"
+            echo "========================================"
+            echo "Full deployment result for $transformed_file:"
             echo "$RESULT"
+            echo "========================================"
             
-            # Check if deployment failed
-            if echo "$RESULT" | grep -q '"errors"'; then
+            # Check if deployment failed - look for both errors and exit code
+            if [[ $EXIT_CODE -ne 0 ]] || echo "$RESULT" | grep -q '"errors"'; then
               echo "❌ Deployment failed for $transformed_file"
-              echo "::error::Deployment failed for $transformed_file: $RESULT"
+              echo "Exit code: $EXIT_CODE"
+              if echo "$RESULT" | grep -q '"errors"'; then
+                echo "Error details:"
+                echo "$RESULT" | jq '.errors' 2>/dev/null || echo "$RESULT"
+              fi
+              echo "::error::Deployment failed for $transformed_file with exit code $EXIT_CODE: $RESULT"
               exit 1
             else
               echo "✅ Deployment succeeded for $transformed_file"
@@ -264,8 +286,10 @@ jobs:
               FOLDERS=$(echo "$RESULT" | jq -r '.[].deployedFolders[]?' 2>/dev/null || echo "")
               if [[ -n "$FOLDERS" ]]; then
                 DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
+                echo "Extracted folders: $FOLDERS"
               fi
             fi
+            echo ""
           done
           
           echo "deployed_folders=$DEPLOYED_FOLDERS" >> $GITHUB_OUTPUT
