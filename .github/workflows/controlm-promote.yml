@@ -378,31 +378,29 @@ jobs:
             else
               echo "✅ Deployment succeeded for $transformed_file"
               
-              # Extract deployed folders from result - improved parsing
+              # Extract deployed folders from result using your proven jq method
               echo "Parsing deployment result for folders..."
               
-              # Method 1: Try to extract from JSON array format
-              FOLDERS=$(echo "$RESULT" | jq -r 'if type == "array" then .[0].deployedFolders[]? else .deployedFolders[]? end' 2>/dev/null || echo "")
+              # Use the jq method from your screenshot: jq -r '.[] | .deployedFolders[]'
+              FOLDERS=$(echo "$RESULT" | jq -r '.[] | .deployedFolders[]?' 2>/dev/null || echo "")
               
-              # Method 2: If that fails, try extracting from simple object
+              # Fallback method: try direct array access if the above fails
               if [[ -z "$FOLDERS" ]]; then
+                echo "Trying fallback jq method..."
                 FOLDERS=$(echo "$RESULT" | jq -r '.deployedFolders[]?' 2>/dev/null || echo "")
               fi
               
-              # Method 3: If still no luck, try grep-based extraction
+              # Final fallback: try simple object format
               if [[ -z "$FOLDERS" ]]; then
-                FOLDERS=$(echo "$RESULT" | grep -oP '"deployedFolders":\s*\[\s*"\K[^"]*' 2>/dev/null || echo "")
-              fi
-              
-              # Method 4: Look for any folder-like patterns in the output
-              if [[ -z "$FOLDERS" ]]; then
-                echo "Trying pattern-based folder extraction..."
-                FOLDERS=$(echo "$RESULT" | grep -oP '[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+' 2>/dev/null | head -1 || echo "")
+                echo "Trying simple object format..."
+                FOLDERS=$(echo "$RESULT" | jq -r 'if type == "array" then .[0].deployedFolders[]? else .deployedFolders[]? end' 2>/dev/null || echo "")
               fi
               
               if [[ -n "$FOLDERS" ]]; then
-                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS"
-                echo "Extracted folders: $FOLDERS"
+                # Convert multi-line folder output to space-separated format
+                FOLDERS_FORMATTED=$(echo "$FOLDERS" | tr '\n' ' ' | sed 's/ $//')
+                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS_FORMATTED"
+                echo "Extracted folders: $FOLDERS_FORMATTED"
                 echo "Total deployed folders so far: $DEPLOYED_FOLDERS"
               else
                 echo "⚠️ No deployedFolders found in result"
@@ -582,7 +580,7 @@ jobs:
             echo "✅ **Deployment:** Succeeded" >> $GITHUB_STEP_SUMMARY
             echo "**Deployed Folders:** ${{ needs.deploy-jobs.outputs.deployed_folders }}" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.deploy-jobs.result }}" == "skipped" ]]; then
-            echo "⏭️ **Deployment:** Skipped (not main/develop branch)" >> $GITHUB_STEP_SUMMARY
+            echo "⭐️ **Deployment:** Skipped (not main/develop branch)" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Deployment:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
@@ -590,7 +588,7 @@ jobs:
           if [[ "${{ needs.run-jobs.result }}" == "success" ]]; then
             echo "✅ **Job Execution:** Completed" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.run-jobs.result }}" == "skipped" ]]; then
-            echo "⏭️ **Job Execution:** Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "⭐️ **Job Execution:** Skipped" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Job Execution:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
