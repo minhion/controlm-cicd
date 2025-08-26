@@ -439,11 +439,3 @@ jobs:
           else
             echo "❌ **Deployment:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          if [[ "${{ needs.run-jobs.result }}" == "success" ]]; then
-            echo "✅ **Job Execution:** Completed" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.run-jobs.result }}" == "skipped" ]]; then
-            echo "⭐️ **Job Execution:** Skipped" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Job Execution:** Failed" >> $GITHUB_STEP_SUMMARY
-          fi
