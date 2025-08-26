@@ -378,39 +378,32 @@ jobs:
             else
               echo "✅ Deployment succeeded for $transformed_file"
               
-              # Extract deployed folders from result using your proven jq method
-              echo "Parsing deployment result for folders..."
+              # Extract folder name directly from the transformed JSON file
+              echo "Extracting folder name from transformed file: $transformed_file"
               
-              # Use the jq method from your screenshot: jq -r '.[] | .deployedFolders[]'
-              FOLDERS=$(echo "$RESULT" | jq -r '.[] | .deployedFolders[]?' 2>/dev/null || echo "")
+              # Extract the root-level key where the value has "Type": "Folder"
+              FOLDER_NAME=$(jq -r 'to_entries | .[] | select(.value.Type == "Folder") | .key' "$transformed_file" 2>/dev/null)
               
-              # Fallback method: try direct array access if the above fails
-              if [[ -z "$FOLDERS" ]]; then
-                echo "Trying fallback jq method..."
-                FOLDERS=$(echo "$RESULT" | jq -r '.deployedFolders[]?' 2>/dev/null || echo "")
-              fi
-              
-              # Final fallback: try simple object format
-              if [[ -z "$FOLDERS" ]]; then
-                echo "Trying simple object format..."
-                FOLDERS=$(echo "$RESULT" | jq -r 'if type == "array" then .[0].deployedFolders[]? else .deployedFolders[]? end' 2>/dev/null || echo "")
-              fi
-              
-              if [[ -n "$FOLDERS" ]]; then
-                # Convert multi-line folder output to space-separated format
-                FOLDERS_FORMATTED=$(echo "$FOLDERS" | tr '\n' ' ' | sed 's/ $//')
-                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDERS_FORMATTED"
-                echo "Extracted folders: $FOLDERS_FORMATTED"
+              if [[ -n "$FOLDER_NAME" && "$FOLDER_NAME" != "null" ]]; then
+                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FOLDER_NAME"
+                echo "✅ Extracted folder name from JSON: $FOLDER_NAME"
                 echo "Total deployed folders so far: $DEPLOYED_FOLDERS"
               else
-                echo "⚠️ No deployedFolders found in result"
-                echo "Full result for debugging:"
-                echo "$RESULT" | head -50
+                echo "⚠️ Could not extract folder name from JSON structure"
+                echo "File content preview:"
+                head -20 "$transformed_file"
                 
-                # As fallback, try to extract folder name from job file
-                JOB_FOLDER=$(basename "$transformed_file" .json | sed 's/-transformed$//')
-                echo "Using fallback folder name: $JOB_FOLDER"
-                DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $JOB_FOLDER"
+                # Fallback: try to extract any root-level key (first one)
+                FALLBACK_FOLDER=$(jq -r 'keys[0]' "$transformed_file" 2>/dev/null)
+                if [[ -n "$FALLBACK_FOLDER" && "$FALLBACK_FOLDER" != "null" ]]; then
+                  DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $FALLBACK_FOLDER"
+                  echo "Using fallback folder name (first key): $FALLBACK_FOLDER"
+                else
+                  # Final fallback: use filename
+                  JOB_FOLDER=$(basename "$transformed_file" .json | sed 's/-transformed$//')
+                  echo "Using filename-based folder name: $JOB_FOLDER"
+                  DEPLOYED_FOLDERS="$DEPLOYED_FOLDERS $JOB_FOLDER"
+                fi
               fi
             fi
             echo ""
