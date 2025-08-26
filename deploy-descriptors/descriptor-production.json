@@ -24,7 +24,7 @@
       {
         "Comment": "Update ZIPCODE variable to a new value",
         "Property": "Variables[1].zipcode",
-        "Assign": "75070"
+        "Assign": "33126"
       },
       {
         "Property": "ServiceName",
