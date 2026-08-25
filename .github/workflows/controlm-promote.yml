@@ -117,7 +117,7 @@ jobs:
       validation_results: ${{ steps.validate.outputs.results }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Find job files
         id: find-jobs
@@ -196,7 +196,7 @@ jobs:
     if: success()
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Transform jobs for target environment
         env:
@@ -302,7 +302,7 @@ jobs:
           done
 
       - name: Upload transformed jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: transformed-jobs-${{ needs.determine-environment.outputs.target_env }}
           path: transformed-jobs/
@@ -316,10 +316,10 @@ jobs:
       deployed_folders: ${{ steps.deploy.outputs.deployed_folders }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download transformed jobs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: transformed-jobs-${{ needs.determine-environment.outputs.target_env }}
           path: transformed-jobs/
